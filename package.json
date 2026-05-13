@@ -1,0 +1,19 @@
+{
+  "name": "discord-activity-bot",
+  "version": "1.0.0",
+  "description": "Discord bot that tracks server activity and sends weekly reports",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "register": "node src/register-commands.js"
+  },
+  "dependencies": {
+    "@seald-io/nedb": "^4.0.4",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
