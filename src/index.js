@@ -1,13 +1,23 @@
 require('dotenv').config();
 const token = process.env.DISCORD_TOKEN;
 console.log('Token present:', !!token, '| Length:', token?.length, '| Starts with:', token?.slice(0, 10));
+const fs = require('fs');
+const path = require('path');
 const {
-  Client, GatewayIntentBits, Events, InteractionType,
+  Client, GatewayIntentBits, Events, InteractionType, EmbedBuilder,
 } = require('discord.js');
 const cron = require('node-cron');
 const { logMessage, getMessageStats, getVoiceStats } = require('./database');
 const { handleVoiceStateUpdate, initActiveSessions } = require('./voiceTracker');
 const { sendWeeklyReport } = require('./tasks/weeklyReport');
+
+const VERSION = '1.1.0';
+
+const PATCH_NOTES = [
+  { emoji: '🛡️', text: '**Anti-farming:** Voice time only counts when 2+ people are in the channel' },
+  { emoji: '🔇', text: '**AFK detection:** Time pauses automatically when you\'re muted or deafened' },
+  { emoji: '👑', text: '**Sitters role:** Top 3 weekly voice chatters earn the Sitters role — drop out of top 3 and it\'s gone' },
+];
 
 const client = new Client({
   intents: [
@@ -21,9 +31,32 @@ const client = new Client({
 
 // ── Ready ─────────────────────────────────────────────────────────────────────
 
-client.once(Events.ClientReady, c => {
+async function sendPatchNotes(guilds) {
+  const versionFile = path.join(__dirname, '..', 'data', 'version.txt');
+  const lastVersion = fs.existsSync(versionFile) ? fs.readFileSync(versionFile, 'utf8').trim() : null;
+  if (lastVersion === VERSION) return;
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🔧 Bot Update — v${VERSION}`)
+    .setColor(0x57F287)
+    .setDescription(PATCH_NOTES.map(n => `${n.emoji} ${n.text}`).join('\n'))
+    .setTimestamp()
+    .setFooter({ text: 'Updates are live now' });
+
+  for (const [, guild] of guilds) {
+    const channel = guild.channels.cache.find(c => c.name === (process.env.REPORT_CHANNEL || 'activity-reports') && c.isTextBased())
+      || guild.channels.cache.find(c => c.isTextBased() && c.permissionsFor(guild.members.me)?.has('SendMessages'));
+    if (channel) await channel.send({ embeds: [embed] }).catch(console.error);
+  }
+
+  fs.writeFileSync(versionFile, VERSION);
+  console.log(`[patch notes] Announced v${VERSION}`);
+}
+
+client.once(Events.ClientReady, async c => {
   console.log(`✅ Logged in as ${c.user.tag}`);
   initActiveSessions(c.guilds.cache);
+  await sendPatchNotes(c.guilds.cache);
 
   const day  = process.env.REPORT_DAY  ?? '0';  // 0 = Sunday
   const hour = process.env.REPORT_HOUR ?? '9';
