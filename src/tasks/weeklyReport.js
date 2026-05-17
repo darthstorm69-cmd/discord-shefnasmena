@@ -1,5 +1,6 @@
 const { EmbedBuilder } = require('discord.js');
 const { getMessageStats, getVoiceStats } = require('../database');
+const { getActiveStats } = require('../voiceTracker');
 
 function formatDuration(ms) {
   if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
@@ -28,6 +29,29 @@ function topChannels(rows, valueKey, limit = 3) {
 
 const MEDALS = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
 
+async function assignTopVoiceRole(guild, topUserId) {
+  const roleName = process.env.TOP_VOICE_ROLE;
+  if (!roleName) return;
+
+  const role = guild.roles.cache.find(r => r.name === roleName);
+  if (!role) {
+    console.warn(`[role] Role "${roleName}" not found in ${guild.name}`);
+    return;
+  }
+
+  for (const [, member] of role.members) {
+    if (member.id !== topUserId) await member.roles.remove(role).catch(console.error);
+  }
+
+  const topMember = await guild.members.fetch(topUserId).catch(() => null);
+  if (!topMember) return console.warn(`[role] Could not fetch member ${topUserId}`);
+
+  if (!topMember.roles.cache.has(role.id)) {
+    await topMember.roles.add(role).catch(console.error);
+    console.log(`[role] Assigned "${roleName}" to ${topMember.user.username}`);
+  }
+}
+
 async function sendWeeklyReport(guild, specificChannel = null) {
   const channel = specificChannel
     || guild.channels.cache.find(c => c.name === (process.env.REPORT_CHANNEL || 'activity-reports') && c.isTextBased())
@@ -37,7 +61,7 @@ async function sendWeeklyReport(guild, specificChannel = null) {
 
   const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const msgRows   = await getMessageStats(guild.id, since);
-  const voiceRows = await getVoiceStats(guild.id, since);
+  const voiceRows = [...await getVoiceStats(guild.id, since), ...getActiveStats(guild.id, since)];
 
   const topMessagers = aggregateByUser(msgRows, 'count').slice(0, 5);
   const topVoicers   = aggregateByUser(voiceRows, 'total_ms').slice(0, 5);
@@ -46,6 +70,8 @@ async function sendWeeklyReport(guild, specificChannel = null) {
   const totalMessages  = topMessagers.reduce((s, [, u]) => s + u.total, 0);
   const totalVoiceMs   = topVoicers.reduce((s, [, u]) => s + u.total, 0);
   const uniqueActive   = new Set([...msgRows.map(r => r.user_id), ...voiceRows.map(r => r.user_id)]).size;
+
+  if (topVoicers[0]) assignTopVoiceRole(guild, topVoicers[0][0]).catch(console.error);
 
   const embed = new EmbedBuilder()
     .setTitle('📊 Weekly Activity Report')
@@ -116,7 +142,7 @@ async function sendWeeklyReport(guild, specificChannel = null) {
 
 async function sendCustomReport(guild, channel, since, days) {
   const msgRows   = await getMessageStats(guild.id, since);
-  const voiceRows = await getVoiceStats(guild.id, since);
+  const voiceRows = [...await getVoiceStats(guild.id, since), ...getActiveStats(guild.id, since)];
 
   const topMessagers = aggregateByUser(msgRows, 'count').slice(0, 5);
   const topVoicers   = aggregateByUser(voiceRows, 'total_ms').slice(0, 5);

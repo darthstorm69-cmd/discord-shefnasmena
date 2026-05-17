@@ -34,22 +34,8 @@ async function getMessageStats(guildId, since) {
 
 // ── Voice sessions ────────────────────────────────────────────────────────────
 
-async function logVoiceJoin(userId, username, channelId, channelName, guildId) {
-  // Close any open session first
-  await voice.updateAsync(
-    { userId, guildId, leaveTime: { $exists: false } },
-    { $set: { leaveTime: Date.now() } },
-    { multi: true },
-  );
-  await voice.insertAsync({ userId, username, channelId, channelName, guildId, joinTime: Date.now() });
-}
-
-function logVoiceLeave(userId, guildId) {
-  voice.updateAsync(
-    { userId, guildId, leaveTime: { $exists: false } },
-    { $set: { leaveTime: Date.now() } },
-    { multi: true },
-  );
+function saveVoiceSession({ userId, username, channelId, channelName, guildId, joinTime, effectiveMs }) {
+  voice.insertAsync({ userId, username, channelId, channelName, guildId, joinTime, effectiveMs });
 }
 
 async function getVoiceStats(guildId, since) {
@@ -58,7 +44,10 @@ async function getVoiceStats(guildId, since) {
 
   const map = {};
   for (const r of rows) {
-    const duration = (r.leaveTime ?? now) - r.joinTime;
+    // Support old records (joinTime/leaveTime) and new records (effectiveMs)
+    const duration = r.effectiveMs !== undefined
+      ? r.effectiveMs
+      : (r.leaveTime ?? now) - r.joinTime;
     const key = `${r.userId}::${r.channelName}`;
     if (!map[key]) map[key] = { user_id: r.userId, username: r.username, channel_name: r.channelName, total_ms: 0 };
     map[key].total_ms += duration;
@@ -66,4 +55,4 @@ async function getVoiceStats(guildId, since) {
   return Object.values(map).sort((a, b) => b.total_ms - a.total_ms);
 }
 
-module.exports = { logMessage, getMessageStats, logVoiceJoin, logVoiceLeave, getVoiceStats };
+module.exports = { logMessage, getMessageStats, saveVoiceSession, getVoiceStats };

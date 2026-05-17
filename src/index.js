@@ -5,7 +5,8 @@ const {
   Client, GatewayIntentBits, Events, InteractionType,
 } = require('discord.js');
 const cron = require('node-cron');
-const { logMessage, logVoiceJoin, logVoiceLeave, getMessageStats, getVoiceStats } = require('./database');
+const { logMessage, getMessageStats, getVoiceStats } = require('./database');
+const { handleVoiceStateUpdate, initActiveSessions } = require('./voiceTracker');
 const { sendWeeklyReport } = require('./tasks/weeklyReport');
 
 const client = new Client({
@@ -22,6 +23,7 @@ const client = new Client({
 
 client.once(Events.ClientReady, c => {
   console.log(`✅ Logged in as ${c.user.tag}`);
+  initActiveSessions(c.guilds.cache);
 
   const day  = process.env.REPORT_DAY  ?? '0';  // 0 = Sunday
   const hour = process.env.REPORT_HOUR ?? '9';
@@ -48,22 +50,7 @@ client.on(Events.MessageCreate, message => {
 
 // ── Voice tracking ────────────────────────────────────────────────────────────
 
-client.on(Events.VoiceStateUpdate, (oldState, newState) => {
-  const userId   = newState.id;
-  const username = newState.member?.user?.username ?? 'Unknown';
-  const guildId  = newState.guild.id;
-
-  const joined  = !oldState.channelId && newState.channelId;
-  const left    = oldState.channelId  && !newState.channelId;
-  const moved   = oldState.channelId  && newState.channelId && oldState.channelId !== newState.channelId;
-
-  if (joined || moved) {
-    if (moved) logVoiceLeave(userId, guildId);
-    logVoiceJoin(userId, username, newState.channelId, newState.channel.name, guildId);
-  } else if (left) {
-    logVoiceLeave(userId, guildId);
-  }
-});
+client.on(Events.VoiceStateUpdate, handleVoiceStateUpdate);
 
 // ── Slash commands ────────────────────────────────────────────────────────────
 
