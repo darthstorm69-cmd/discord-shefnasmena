@@ -29,7 +29,7 @@ function topChannels(rows, valueKey, limit = 3) {
 
 const MEDALS = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
 
-async function assignTopVoiceRole(guild, topUserId) {
+async function assignTopVoiceRole(guild, topUserIds) {
   const roleName = process.env.TOP_VOICE_ROLE;
   if (!roleName) return;
 
@@ -39,16 +39,22 @@ async function assignTopVoiceRole(guild, topUserId) {
     return;
   }
 
+  // Remove from anyone no longer in top 3
   for (const [, member] of role.members) {
-    if (member.id !== topUserId) await member.roles.remove(role).catch(console.error);
+    if (!topUserIds.includes(member.id)) {
+      await member.roles.remove(role).catch(console.error);
+      console.log(`[role] Removed "${roleName}" from ${member.user.username}`);
+    }
   }
 
-  const topMember = await guild.members.fetch(topUserId).catch(() => null);
-  if (!topMember) return console.warn(`[role] Could not fetch member ${topUserId}`);
-
-  if (!topMember.roles.cache.has(role.id)) {
-    await topMember.roles.add(role).catch(console.error);
-    console.log(`[role] Assigned "${roleName}" to ${topMember.user.username}`);
+  // Assign to top 3 who don't already have it
+  for (const userId of topUserIds) {
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member) continue;
+    if (!member.roles.cache.has(role.id)) {
+      await member.roles.add(role).catch(console.error);
+      console.log(`[role] Assigned "${roleName}" to ${member.user.username}`);
+    }
   }
 }
 
@@ -71,7 +77,8 @@ async function sendWeeklyReport(guild, specificChannel = null) {
   const totalVoiceMs   = topVoicers.reduce((s, [, u]) => s + u.total, 0);
   const uniqueActive   = new Set([...msgRows.map(r => r.user_id), ...voiceRows.map(r => r.user_id)]).size;
 
-  if (topVoicers[0]) assignTopVoiceRole(guild, topVoicers[0][0]).catch(console.error);
+  const top3Ids = topVoicers.slice(0, 3).map(([id]) => id);
+  if (top3Ids.length > 0) assignTopVoiceRole(guild, top3Ids).catch(console.error);
 
   const embed = new EmbedBuilder()
     .setTitle('📊 Weekly Activity Report')
