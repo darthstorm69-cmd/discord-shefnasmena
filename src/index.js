@@ -7,16 +7,17 @@ const {
   Client, GatewayIntentBits, Events, InteractionType, EmbedBuilder,
 } = require('discord.js');
 const cron = require('node-cron');
-const { logMessage, getMessageStats, getVoiceStats } = require('./database');
-const { handleVoiceStateUpdate, initActiveSessions } = require('./voiceTracker');
+const { logMessage, getMessageStats, getVoiceStats, getAllTimeVoiceStats, getWallet, getWalletLeaderboard } = require('./database');
+const { handleVoiceStateUpdate, initActiveSessions, getActiveStats } = require('./voiceTracker');
 const { sendWeeklyReport } = require('./tasks/weeklyReport');
+const { seedWalletsFromHistory, BUCKS_PER_HOUR } = require('./economy');
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 const PATCH_NOTES = [
-  { emoji: '🛡️', text: '**Anti-farming:** Voice time only counts when 2+ people are in the channel' },
-  { emoji: '🔇', text: '**AFK detection:** Time pauses automatically when you\'re muted or deafened' },
-  { emoji: '👑', text: '**Sitters role:** Top 3 weekly voice chatters earn the Sitters role — drop out of top 3 and it\'s gone' },
+  { emoji: '💰', text: `**Bucks system:** Earn ${BUCKS_PER_HOUR} 🪙 per hour of voice time — balance is yours forever` },
+  { emoji: '📋', text: '**Full leaderboard:** \`/leaderboard\` shows all-time voice time for every member' },
+  { emoji: '💼', text: '**Wallet:** Use \`/wallet\` to check your bucks balance anytime' },
 ];
 
 const client = new Client({
@@ -57,6 +58,10 @@ client.once(Events.ClientReady, async c => {
   console.log(`✅ Logged in as ${c.user.tag}`);
   initActiveSessions(c.guilds.cache);
   await sendPatchNotes(c.guilds.cache);
+
+  for (const [, guild] of c.guilds.cache) {
+    seedWalletsFromHistory(guild.id).catch(console.error);
+  }
 
   const day  = process.env.REPORT_DAY  ?? '0';  // 0 = Sunday
   const hour = process.env.REPORT_HOUR ?? '9';
@@ -132,6 +137,105 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     await interaction.editReply({ content: lines.join('\n') });
+  }
+
+  if (interaction.commandName === 'wallet') {
+    await interaction.deferReply({ ephemeral: true });
+
+    function fmt(ms) {
+      if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
+      const h = Math.floor(ms / 3_600_000);
+      const m = Math.floor((ms % 3_600_000) / 60_000);
+      return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+
+    const userId  = interaction.user.id;
+    const guildId = interaction.guild.id;
+
+    const balance      = await getWallet(userId, guildId);
+    const allTimeRows  = await getAllTimeVoiceStats(guildId);
+    const activeRows   = getActiveStats(guildId, 0);
+
+    const historicalMs = (allTimeRows.find(r => r.user_id === userId)?.total_ms ?? 0);
+    const activeMs     = (activeRows.find(r => r.user_id === userId)?.total_ms ?? 0);
+    const totalMs      = historicalMs + activeMs;
+
+    const embed = new EmbedBuilder()
+      .setTitle(`💼 ${interaction.user.username}'s Wallet`)
+      .setColor(0xF1C40F)
+      .addFields(
+        { name: '🪙 Balance', value: `**${balance.toLocaleString()} bucks**`, inline: true },
+        { name: '🎙️ All-Time Voice', value: `**${fmt(totalMs)}**`, inline: true },
+        { name: '📈 Earn Rate', value: `${BUCKS_PER_HOUR} 🪙 / hour`, inline: true },
+      )
+      .setFooter({ text: 'Time only counts when 2+ people are in the channel and you\'re unmuted' });
+
+    await interaction.editReply({ embeds: [embed] });
+  }
+
+  if (interaction.commandName === 'leaderboard') {
+    await interaction.deferReply();
+
+    function fmt(ms) {
+      if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
+      const h = Math.floor(ms / 3_600_000);
+      const m = Math.floor((ms % 3_600_000) / 60_000);
+      return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+
+    const guildId     = interaction.guild.id;
+    const historical  = await getAllTimeVoiceStats(guildId);
+    const active      = getActiveStats(guildId, 0);
+    const walletRows  = await getWalletLeaderboard(guildId);
+
+    // Merge historical + active voice time per user
+    const voiceMap = {};
+    for (const r of [...historical, ...active]) {
+      if (!voiceMap[r.user_id]) voiceMap[r.user_id] = { username: r.username, total_ms: 0 };
+      voiceMap[r.user_id].total_ms += r.total_ms;
+    }
+    // Include wallet holders with 0 voice time (edge case)
+    for (const w of walletRows) {
+      if (!voiceMap[w.userId]) voiceMap[w.userId] = { username: w.username, total_ms: 0 };
+    }
+
+    const bucksMap = Object.fromEntries(walletRows.map(w => [w.userId, w.balance]));
+
+    const sorted = Object.entries(voiceMap)
+      .sort((a, b) => b[1].total_ms - a[1].total_ms);
+
+    const MEDALS = ['🥇', '🥈', '🥉'];
+
+    const embed = new EmbedBuilder()
+      .setTitle('📋 All-Time Voice Leaderboard')
+      .setColor(0x5865F2)
+      .setDescription(`**${sorted.length}** member${sorted.length !== 1 ? 's' : ''} tracked`)
+      .setFooter({ text: `${interaction.guild.name} • all time` });
+
+    // Chunk into fields of 15 users each
+    const CHUNK = 15;
+    for (let i = 0; i < sorted.length; i += CHUNK) {
+      const chunk = sorted.slice(i, i + CHUNK);
+      const lines = chunk.map(([uid, u], j) => {
+        const rank   = i + j + 1;
+        const medal  = rank <= 3 ? MEDALS[rank - 1] : `\`#${rank}\``;
+        const bucks  = (bucksMap[uid] ?? 0).toLocaleString();
+        return `${medal} **${u.username}** — ${fmt(u.total_ms)} • ${bucks} 🪙`;
+      });
+
+      embed.addFields({
+        name: i === 0 ? '🎙️ Rankings' : '​',
+        value: lines.join('\n'),
+      });
+
+      // Discord embed total char limit ~6000 — bail early if we're getting large
+      if (embed.length > 5500) {
+        embed.addFields({ name: '​', value: `_…and ${sorted.length - (i + CHUNK)} more_` });
+        break;
+      }
+    }
+
+    await interaction.editReply({ embeds: [embed] });
   }
 });
 

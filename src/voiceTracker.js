@@ -1,4 +1,5 @@
 const { saveVoiceSession } = require('./database');
+const { awardSessionBucks } = require('./economy');
 
 // key: `${userId}:${guildId}`
 // Session fields:
@@ -135,7 +136,10 @@ function _closeSession(key, now) {
   const s = activeSessions.get(key);
   if (!s) return;
   if (s.lastValidJoin !== null) s.effectiveMs += now - s.lastValidJoin;
-  if (s.effectiveMs > 0) saveVoiceSession(s);
+  if (s.effectiveMs > 0) {
+    saveVoiceSession(s);
+    awardSessionBucks(s.userId, s.username, s.guildId, s.effectiveMs).catch(console.error);
+  }
   activeSessions.delete(key);
 }
 

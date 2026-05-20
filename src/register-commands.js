@@ -17,6 +17,12 @@ const commands = [
   new SlashCommandBuilder()
     .setName('mystats')
     .setDescription('See your own activity this week'),
+  new SlashCommandBuilder()
+    .setName('wallet')
+    .setDescription('Check your bucks balance and all-time voice time'),
+  new SlashCommandBuilder()
+    .setName('leaderboard')
+    .setDescription('All-time voice leaderboard for every member in the server'),
 ].map(c => c.toJSON());
 
 const rest = new REST().setToken(process.env.DISCORD_TOKEN);
